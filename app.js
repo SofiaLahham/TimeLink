@@ -2,8 +2,14 @@
   const DIA_ORDEM = [1,2,3,4,5]; // seg..sex (sem fim de semana)
   const DIA_NOME = {0:'Domingo',1:'Segunda',2:'Terça',3:'Quarta',4:'Quinta',5:'Sexta',6:'Sábado'};
   const DIA_ABREV = {0:'Dom',1:'Seg',2:'Ter',3:'Qua',4:'Qui',5:'Sex',6:'Sáb'};
-  const CORES = ['#f472b6','#c084fc','#60a5fa','#4ade80','#fbbf24','#fb7185','#2dd4bf','#a78bfa'];
-  const EMOJIS = ['🙂','😄','😎','🥳','🤓','😴','🥰','😇','🌸','⭐','🔥','💜','🎧','📚','☕','🐱','🦋','🍀','🌙','⚡'];
+  const CORES = ['#f472b6','#c084fc','#60a5fa','#4ade80','#fbbf24','#fb7185','#2dd4bf','#a78bfa','#f87171','#fb923c','#facc15','#34d399','#22d3ee','#818cf8','#e879f9','#94a3b8'];
+  const EMOJIS = [
+    '🙂','😄','😎','🥳','🤓','😴','🥰','😇','😉','😌','🤩','🥹','😅','🫠','🤠','😏',
+    '📚','✏️','📝','🎓','💻','🧠','🔬','📐','🏋️','🏃','🧘','⚽','🚴','🥗','🔍','💧',
+    '💊','🧴','🪥','🧹','🛒','🐶','💼','👠','💰','📖','🎧','🎨','🎹','🌸','⭐','🔥',
+    '💜','☕','🐱','🦋','🍀','🌙','⚡','🍕','🍔','🍜','🍩','🍎','🎮','🎬','🎵','⚽',
+    '🏀','🏈','🎾','🚗','✈️','🏖️','⛰️','🌊','🌈','☀️','❄️','🎉','🎁','💡','🔑','📌'
+  ];
   const BLOCOS = [
     { label:'AB', inicio:'08:00', fim:'09:30' },
     { label:'CD', inicio:'09:45', fim:'11:15' },
@@ -14,6 +20,12 @@
     { label:'LM', inicio:'19:15', fim:'20:45' },
     { label:'NP', inicio:'21:00', fim:'22:30' },
   ];
+  const TIPOS = [
+    { v:'aula', label:'Aula' },
+    { v:'prova', label:'Prova' },
+    { v:'trabalho', label:'Trabalho' },
+  ];
+  const TIPO_COR = { prova:'#ef4444', trabalho:'#f59e0b' };
 
   const ICONS = {
     gear: `<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a7.6 7.6 0 0 0 .1-1 7.6 7.6 0 0 0-.1-1l2-1.5-2-3.4-2.4 1a7.7 7.7 0 0 0-1.7-1L14.8 3h-4l-.5 2.6a7.7 7.7 0 0 0-1.7 1l-2.4-1-2 3.4L6 11a7.6 7.6 0 0 0 0 2l-2 1.5 2 3.4 2.4-1a7.7 7.7 0 0 0 1.7 1l.5 2.6h4l.5-2.6a7.7 7.7 0 0 0 1.7-1l2.4 1 2-3.4-2-1.5z"/></svg>`,
@@ -40,6 +52,13 @@
   let sb = null;
   if (window.supabase && SUPABASE_ANON_KEY) {
     sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    sb.auth.onAuthStateChange((event, sess)=>{
+      if(event === 'PASSWORD_RECOVERY'){
+        emRecuperacaoSenha = true;
+        session = sess;
+        render();
+      }
+    });
   }
 
   let session = null;
@@ -61,6 +80,8 @@
   let obIndex = 0;
   let obTemAula = {};
   let diasSelecionados = [];
+  let tipoSelecionado = 'aula';
+  let emRecuperacaoSenha = false;
 
   const app = document.getElementById('app');
 
@@ -76,6 +97,31 @@
   function minToHHMM(min){ const h=Math.floor(min/60), m=min%60; return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0'); }
   function fmtRange(a,b){ return `${a} – ${b}`; }
   function fmtDataCurta(d){ return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0'); }
+  function datasSemanaAtual(){
+    const hoje = new Date();
+    const diaSemana = hoje.getDay();
+    const offsetSegunda = diaSemana===0 ? -6 : 1-diaSemana;
+    const segunda = new Date(hoje);
+    segunda.setDate(hoje.getDate()+offsetSegunda);
+    const mapa = {};
+    DIA_ORDEM.forEach((d,i)=>{
+      const dt = new Date(segunda);
+      dt.setDate(segunda.getDate()+i);
+      mapa[d] = dt.getDate();
+    });
+    return mapa;
+  }
+  function tipoBadgeHtml(tipo){
+    if(!tipo || tipo==='aula') return '';
+    const cor = TIPO_COR[tipo] || TIPO_COR.prova;
+    const label = TIPOS.find(t=>t.v===tipo)?.label || tipo;
+    return `<span class="tipo-badge" style="color:${cor};border-color:${cor}66;background:${cor}1f">${label}</span>`;
+  }
+  function tipoChipsHtml(prefix, atual){
+    return `<div class="days-multi" id="${prefix}-tipo">` + TIPOS.map(t=>
+      `<button type="button" data-tipo="${t.v}" class="${(atual||'aula')===t.v?'sel':''}">${t.label}</button>`
+    ).join('') + `</div>`;
+  }
   function corDe(id){
     let h=0; for(const c of String(id)) h = (h*31 + c.charCodeAt(0))>>>0;
     return CORES[h % CORES.length];
@@ -300,7 +346,7 @@
 
   // ---------- combinar grade do dia ----------
   function combinarDia(dia){
-    const pessoas = [{ id: session.user.id, nome: profile.nome, emoji: profile.emoji, cor: profile.cor, avatar_url: profile.avatar_url, aulas: myAulas }]
+    const pessoas = [{ id: session.user.id, nome: 'Eu', emoji: profile.emoji, cor: profile.cor, avatar_url: profile.avatar_url, aulas: myAulas }]
       .concat(friends.map(f=>{
         const p = perfilDe(f.otherId);
         return { id: f.otherId, nome: nomeExibido(f.otherId, p.nome || f.otherNome), emoji: p.emoji, cor: p.cor, avatar_url: p.avatar_url, aulas: friendAulasMap[f.otherId] || [] };
@@ -309,7 +355,7 @@
     pessoas.forEach(p=>{
       p.aulas.filter(a=>a.dia===dia).forEach(a=>{
         itens.push({
-          pessoaId: p.id, nome: p.nome, cor: p.cor, emoji: p.emoji, avatar_url: p.avatar_url,
+          pessoaId: p.id, nome: p.nome, cor: p.cor, emoji: p.emoji, avatar_url: p.avatar_url, tipo: a.tipo,
           inicio: a.inicio.slice(0,5), fim: a.fim.slice(0,5), sigla: a.sigla, predio: a.predio, sala: a.sala,
           inicioMin: toMin(a.inicio), fimMin: toMin(a.fim)
         });
@@ -346,6 +392,7 @@
 
   // ---------- render ----------
   function render(){
+    if(emRecuperacaoSenha) return renderNovaSenha();
     if(!session) return renderAuth();
     if(!profile) return renderCompletarPerfil();
     if(!profile.onboarding_feito) return renderOnboarding();
@@ -381,6 +428,7 @@
 
   function renderAuth(){
     if(authScreen === 'cadastro') return renderCadastro();
+    if(authScreen === 'recuperar') return renderRecuperarSenha();
     app.innerHTML = `
       <div class="brand-hero">
         <h1>TimeLink</h1>
@@ -394,8 +442,10 @@
         <button class="primary" type="submit">Entrar</button>
       </form>
       <div class="auth-toggle">Ainda não tem conta? <button class="link-btn" id="go-cad">Cadastre-se</button></div>
+      <div class="auth-toggle" style="margin-top:8px"><button class="link-btn" id="go-recuperar">Esqueci minha senha</button></div>
     `;
     document.getElementById('go-cad').onclick = ()=>{ authScreen='cadastro'; render(); };
+    document.getElementById('go-recuperar').onclick = ()=>{ authScreen='recuperar'; render(); };
     document.getElementById('f-login').onsubmit = async (e)=>{
       e.preventDefault();
       if(busy) return; busy = true;
@@ -412,6 +462,81 @@
         render();
       }catch(err){
         errEl.textContent = 'E-mail ou senha incorretos.';
+      }
+      busy = false;
+    };
+  }
+
+  function renderRecuperarSenha(){
+    app.innerHTML = `
+      <div class="brand-hero">
+        <h1>Recuperar senha</h1>
+        <p>Digite seu e-mail e enviaremos um link pra você criar uma senha nova.</p>
+      </div>
+      <form class="card" id="f-recuperar">
+        <div class="field"><label>E-mail</label><input type="email" id="rc-email" required></div>
+        <div id="rc-err" class="err"></div>
+        <div id="rc-ok" style="color:var(--ok);font-size:12.5px;margin-top:8px;display:none">Link enviado! Confira seu e-mail (e o spam).</div>
+        <button class="primary" type="submit">Enviar link</button>
+      </form>
+      <div class="auth-toggle"><button class="link-btn" id="go-login-2">Voltar para o login</button></div>
+    `;
+    document.getElementById('go-login-2').onclick = ()=>{ authScreen='login'; render(); };
+    document.getElementById('f-recuperar').onsubmit = async (e)=>{
+      e.preventDefault();
+      if(busy) return; busy = true;
+      const email = document.getElementById('rc-email').value.trim();
+      const errEl = document.getElementById('rc-err');
+      const okEl = document.getElementById('rc-ok');
+      errEl.textContent = ''; okEl.style.display = 'none';
+      try{
+        const redirectTo = window.location.origin + window.location.pathname;
+        const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo });
+        if(error) throw error;
+        okEl.style.display = 'block';
+      }catch(err){
+        errEl.textContent = 'Não foi possível enviar o link, confira o e-mail digitado.';
+      }
+      busy = false;
+    };
+  }
+
+  function renderNovaSenha(){
+    app.innerHTML = `
+      <div class="brand-hero">
+        <h1>Nova senha</h1>
+        <p>Escolha uma senha nova pra sua conta.</p>
+      </div>
+      <form class="card" id="f-nova-senha">
+        <div class="field"><label>Nova senha</label><input type="password" id="ns-senha" required minlength="6"></div>
+        <div class="field"><label>Confirmar senha</label><input type="password" id="ns-senha2" required minlength="6"></div>
+        <div id="ns-err" class="err"></div>
+        <button class="primary" type="submit">Salvar nova senha</button>
+      </form>
+    `;
+    document.getElementById('f-nova-senha').onsubmit = async (e)=>{
+      e.preventDefault();
+      if(busy) return; busy = true;
+      const senha = document.getElementById('ns-senha').value;
+      const senha2 = document.getElementById('ns-senha2').value;
+      const errEl = document.getElementById('ns-err');
+      errEl.textContent = '';
+      if(senha !== senha2){
+        errEl.textContent = 'As senhas não coincidem.';
+        busy = false; return;
+      }
+      try{
+        const { error } = await sb.auth.updateUser({ password: senha });
+        if(error) throw error;
+        emRecuperacaoSenha = false;
+        showStatus('Senha alterada');
+        const { data } = await sb.auth.getSession();
+        session = data.session;
+        await fetchProfile();
+        if(profile) await refreshAll();
+        render();
+      }catch(err){
+        errEl.textContent = 'Não foi possível salvar a nova senha.';
       }
       busy = false;
     };
@@ -564,6 +689,7 @@
       : DIA_NOME[currentDay];
     let html = headerHtml('Grade', subtitulo);
 
+    const datas = datasSemanaAtual();
     html += `<div class="days">`;
     DIA_ORDEM.forEach(d=>{
       const cls = ['day-pill'];
@@ -573,6 +699,7 @@
       if(qtd>0) cls.push('has');
       html += `<div class="${cls.join(' ')}" data-day="${d}">
         <span class="d">${DIA_ABREV[d]}</span>
+        <span class="num">${datas[d]}</span>
         <span class="dot"></span>
       </div>`;
     });
@@ -587,7 +714,7 @@
     });
     html += `</div>`;
 
-    if(friends.length===0){
+    if(grupos.length === 0 && friends.length===0){
       html += `<div class="empty">${ICONS.link.replace('class="icon"','class="icon" style="width:36px;height:36px"')}Você ainda não tem conexões.<br>Abra <b>Conexões</b> e adicione a chave de alguém.</div>`;
     } else if(grupos.length === 0){
       html += `<div class="empty">${ICONS.calendar.replace('class="icon"','class="icon" style="width:36px;height:36px"')}Ninguém tem aula ${currentDay===hoje?'hoje':'nesse dia'}.</div>`;
@@ -604,7 +731,7 @@
           html += `<div class="aula-row">
             <div class="avatar" style="background:${it.cor}">${avatarHtml(it)}</div>
             <div class="aula-info">
-              <div class="nome">${it.nome}${it.sigla?` · ${it.sigla}`:''}</div>
+              <div class="nome">${it.nome}${it.sigla?` · ${it.sigla}`:''}${tipoBadgeHtml(it.tipo)}</div>
               <div class="local">${fmtRange(it.inicio,it.fim)} · ${[it.predio, it.sala].filter(Boolean).join(' · ') || 'sem local'}</div>
             </div>
           </div>`;
@@ -644,6 +771,7 @@
         ${DIA_ORDEM.map(d=>`<button type="button" data-day="${d}" class="${diasSelecionados.includes(d)?'sel':''}">${DIA_ABREV[d]}</button>`).join('')}
       </div></div>
       `}
+      <div class="field"><label>Tipo</label>${tipoChipsHtml('aula', editando?editando.tipo:tipoSelecionado)}</div>
       <div class="field"><label>Sigla (opcional)</label><input type="text" id="aula-sigla" placeholder="Ex: AB" maxlength="10" value="${editando?editando.sigla||'':''}"></div>
       ${blocoChipsHtml('aula')}
       <div class="row2" style="margin-top:14px">
@@ -669,7 +797,7 @@
       html += `<div class="list-item" data-edit="${a.id}" style="cursor:pointer">
         <div class="swatch" style="background:${profile.cor}">${avatarHtml(profile)}</div>
         <div class="grow">
-          <div class="t1">${DIA_ABREV[a.dia]} ${a.sigla?('· '+a.sigla):''} · ${a.inicio.slice(0,5)}–${a.fim.slice(0,5)}</div>
+          <div class="t1">${DIA_ABREV[a.dia]} ${a.sigla?('· '+a.sigla):''} · ${a.inicio.slice(0,5)}–${a.fim.slice(0,5)}${tipoBadgeHtml(a.tipo)}</div>
           <div class="t2">${[a.predio,a.sala].filter(Boolean).join(' · ') || 'sem local'}</div>
         </div>
         <button class="del" data-del-aula="${a.id}">${ICONS.x}</button>
@@ -695,9 +823,16 @@
         };
       });
     }
+    document.querySelectorAll('#aula-tipo button').forEach(btn=>{
+      btn.onclick = ()=>{
+        tipoSelecionado = btn.dataset.tipo;
+        document.querySelectorAll('#aula-tipo button').forEach(b=>b.classList.toggle('sel', b===btn));
+      };
+    });
 
     document.getElementById('form-aula').onsubmit = (e)=>{
       e.preventDefault();
+      const tipo = document.querySelector('#aula-tipo button.sel')?.dataset.tipo || 'aula';
       const sigla = document.getElementById('aula-sigla').value.trim().toUpperCase();
       const inicio = document.getElementById('aula-inicio').value;
       const fim = document.getElementById('aula-fim').value;
@@ -706,11 +841,12 @@
       if(!inicio || !fim) return;
       if(editando){
         const dia = Number(document.getElementById('aula-dia').value);
-        upsertAula({ dia, sigla, inicio, fim, predio, sala });
+        upsertAula({ dia, sigla, inicio, fim, predio, sala, tipo });
       } else {
         if(diasSelecionados.length===0){ showStatus('Escolha pelo menos um dia'); return; }
-        addAulaVariosDias({ sigla, inicio, fim, predio, sala }, diasSelecionados);
+        addAulaVariosDias({ sigla, inicio, fim, predio, sala, tipo }, diasSelecionados);
         diasSelecionados = [];
+        tipoSelecionado = 'aula';
       }
     };
     const cancelBtn = document.getElementById('btn-cancel-edit');
@@ -833,12 +969,21 @@
     html += `<div class="section-title">Cor</div>
     <div class="card"><div class="palette" id="cor-palette">
       ${CORES.map(c=>`<div class="sw ${c===profile.cor?'sel':''}" style="background:${c}" data-cor="${c}"></div>`).join('')}
+      <label class="sw cor-custom-sw" title="Escolher outra cor (conta-gotas)">
+        <input type="color" id="cor-custom" value="${profile.cor}">
+      </label>
     </div></div>`;
 
     html += `<div class="section-title">Emoji ${profile.avatar_url? '· usado se remover a foto':''}</div>
-    <div class="card"><div class="emoji-grid" id="emoji-grid">
-      ${EMOJIS.map(e=>`<div class="em ${e===profile.emoji?'sel':''}" data-emoji="${e}">${e}</div>`).join('')}
-    </div></div>`;
+    <div class="card">
+      <div class="emoji-grid" id="emoji-grid">
+        ${EMOJIS.map(e=>`<div class="em ${e===profile.emoji?'sel':''}" data-emoji="${e}">${e}</div>`).join('')}
+      </div>
+      <div class="field" style="margin-top:14px">
+        <label>Outro emoji (digite ou cole)</label>
+        <input type="text" id="emoji-custom" maxlength="8" placeholder="😀" value="${!EMOJIS.includes(profile.emoji)?profile.emoji:''}">
+      </div>
+    </div>`;
 
     app.innerHTML = html + bottomNavHtml();
     bindCommon();
@@ -865,12 +1010,17 @@
       if(!nome) return;
       updateProfile({ nome });
     };
-    document.querySelectorAll('#cor-palette .sw').forEach(el=>{
+    document.querySelectorAll('#cor-palette .sw[data-cor]').forEach(el=>{
       el.onclick = ()=> updateProfile({ cor: el.dataset.cor });
     });
+    document.getElementById('cor-custom').onchange = (e)=> updateProfile({ cor: e.target.value });
     document.querySelectorAll('#emoji-grid .em').forEach(el=>{
       el.onclick = ()=> updateProfile({ emoji: el.dataset.emoji });
     });
+    document.getElementById('emoji-custom').onchange = (e)=>{
+      const v = e.target.value.trim();
+      if(v) updateProfile({ emoji: v });
+    };
   }
 
   // ---------- Ajustes ----------
@@ -921,7 +1071,7 @@
     const ajustesBtn = document.getElementById('btn-ajustes');
     if(ajustesBtn) ajustesBtn.onclick = ()=>{ mostrarAjustes = true; render(); };
     document.querySelectorAll('.bottomnav [data-tab]').forEach(b=>{
-      b.onclick = ()=>{ tab = b.dataset.tab; editingAulaId = null; diasSelecionados = []; render(); };
+      b.onclick = ()=>{ tab = b.dataset.tab; editingAulaId = null; diasSelecionados = []; tipoSelecionado = 'aula'; render(); };
     });
   }
 
