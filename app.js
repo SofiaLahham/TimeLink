@@ -1,5 +1,5 @@
 (function(){
-  const DIA_ORDEM = [1,2,3,4,5,6,0]; // seg..dom
+  const DIA_ORDEM = [1,2,3,4,5]; // seg..sex (sem fim de semana)
   const DIA_NOME = {0:'Domingo',1:'Segunda',2:'Terça',3:'Quarta',4:'Quinta',5:'Sexta',6:'Sábado'};
   const DIA_ABREV = {0:'Dom',1:'Seg',2:'Ter',3:'Qua',4:'Qui',5:'Sex',6:'Sáb'};
   const CORES = ['#f472b6','#c084fc','#60a5fa','#4ade80','#fbbf24','#fb7185','#2dd4bf','#a78bfa'];
@@ -55,11 +55,12 @@
   let authScreen = 'login';   // login | cadastro
   let tab = 'grade';          // grade | conexoes | minhaarea | perfil
   let mostrarAjustes = false;
-  let currentDay = new Date().getDay();
+  let currentDay = (function(){ const h = new Date().getDay(); return (h===0||h===6) ? 1 : h; })();
   let busy = false;
   let editingAulaId = null;
   let obIndex = 0;
   let obTemAula = {};
+  let diasSelecionados = [];
 
   const app = document.getElementById('app');
 
@@ -281,6 +282,13 @@
       const { error } = await sb.from(TB_AULAS).insert({ ...dados, user_id: session.user.id });
       if(error){ showStatus('Erro ao salvar'); console.error(error); return; }
     }
+    await fetchAulas(); render();
+  }
+  async function addAulaVariosDias(dadosBase, dias){
+    const linhas = dias.map(dia=>({ ...dadosBase, dia, user_id: session.user.id }));
+    const { error } = await sb.from(TB_AULAS).insert(linhas);
+    if(error){ showStatus('Erro ao salvar'); console.error(error); return; }
+    showStatus(dias.length>1 ? 'Aulas adicionadas' : 'Aula adicionada');
     await fetchAulas(); render();
   }
   async function delAula(id){
@@ -627,12 +635,16 @@
 
     html += `<form class="card" id="form-aula">
       ${editando? `<div class="section-title" style="margin-top:0">Editando aula</div>` : ''}
-      <div class="row2">
-        <div class="field"><label>Dia</label><select id="aula-dia">
-          ${DIA_ORDEM.map(d=>`<option value="${d}" ${editando && editando.dia===d?'selected':''}>${DIA_NOME[d]}</option>`).join('')}
-        </select></div>
-        <div class="field"><label>Sigla (opcional)</label><input type="text" id="aula-sigla" placeholder="Ex: AB" maxlength="10" value="${editando?editando.sigla||'':''}"></div>
-      </div>
+      ${editando? `
+      <div class="field"><label>Dia</label><select id="aula-dia">
+        ${DIA_ORDEM.map(d=>`<option value="${d}" ${editando.dia===d?'selected':''}>${DIA_NOME[d]}</option>`).join('')}
+      </select></div>
+      ` : `
+      <div class="field"><label>Dias</label><div class="days-multi" id="dias-multi">
+        ${DIA_ORDEM.map(d=>`<button type="button" data-day="${d}" class="${diasSelecionados.includes(d)?'sel':''}">${DIA_ABREV[d]}</button>`).join('')}
+      </div></div>
+      `}
+      <div class="field"><label>Sigla (opcional)</label><input type="text" id="aula-sigla" placeholder="Ex: AB" maxlength="10" value="${editando?editando.sigla||'':''}"></div>
       ${blocoChipsHtml('aula')}
       <div class="row2" style="margin-top:14px">
         <div class="field"><label>Início</label><input type="time" id="aula-inicio" required value="${editando?editando.inicio.slice(0,5):''}"></div>
@@ -673,16 +685,33 @@
       catch(e){ showStatus('Não deu pra copiar'); }
     };
 
+    const diasMultiEl = document.getElementById('dias-multi');
+    if(diasMultiEl){
+      diasMultiEl.querySelectorAll('button').forEach(btn=>{
+        btn.onclick = ()=>{
+          const d = Number(btn.dataset.day);
+          diasSelecionados = diasSelecionados.includes(d) ? diasSelecionados.filter(x=>x!==d) : [...diasSelecionados, d];
+          btn.classList.toggle('sel');
+        };
+      });
+    }
+
     document.getElementById('form-aula').onsubmit = (e)=>{
       e.preventDefault();
-      const dia = Number(document.getElementById('aula-dia').value);
       const sigla = document.getElementById('aula-sigla').value.trim().toUpperCase();
       const inicio = document.getElementById('aula-inicio').value;
       const fim = document.getElementById('aula-fim').value;
       const predio = document.getElementById('aula-predio').value.trim();
       const sala = document.getElementById('aula-sala').value.trim();
       if(!inicio || !fim) return;
-      upsertAula({ dia, sigla, inicio, fim, predio, sala });
+      if(editando){
+        const dia = Number(document.getElementById('aula-dia').value);
+        upsertAula({ dia, sigla, inicio, fim, predio, sala });
+      } else {
+        if(diasSelecionados.length===0){ showStatus('Escolha pelo menos um dia'); return; }
+        addAulaVariosDias({ sigla, inicio, fim, predio, sala }, diasSelecionados);
+        diasSelecionados = [];
+      }
     };
     const cancelBtn = document.getElementById('btn-cancel-edit');
     if(cancelBtn) cancelBtn.onclick = ()=>{ editingAulaId = null; render(); };
@@ -892,7 +921,7 @@
     const ajustesBtn = document.getElementById('btn-ajustes');
     if(ajustesBtn) ajustesBtn.onclick = ()=>{ mostrarAjustes = true; render(); };
     document.querySelectorAll('.bottomnav [data-tab]').forEach(b=>{
-      b.onclick = ()=>{ tab = b.dataset.tab; editingAulaId = null; render(); };
+      b.onclick = ()=>{ tab = b.dataset.tab; editingAulaId = null; diasSelecionados = []; render(); };
     });
   }
 
