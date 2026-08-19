@@ -133,7 +133,10 @@
   }
   function presencaHtml(it, ehHoje){
     if(it.pessoaId === session.user.id && ehHoje){
-      return `<button type="button" class="presenca-toggle ${it.naoVai?'off':''}" data-presenca-aula="${it.aulaId}" data-naovai="${it.naoVai?'1':'0'}">${it.naoVai?'Não vou hoje':'Vou hoje'}</button>`;
+      return `<div class="presenca-switch" data-presenca-aula="${it.aulaId}">
+        <button type="button" class="${it.naoVai?'':'sel'}" data-set-vai="1">Vou</button>
+        <button type="button" class="off ${it.naoVai?'sel':''}" data-set-vai="0">Não vou</button>
+      </div>`;
     }
     if(it.naoVai) return `<span class="naovai-tag">Não vai hoje</span>`;
     return '';
@@ -836,10 +839,13 @@
     document.querySelectorAll('.day-pill').forEach(el=>{
       el.onclick = ()=>{ currentDay = Number(el.dataset.day); render(); };
     });
-    document.querySelectorAll('[data-presenca-aula]').forEach(btn=>{
-      btn.onclick = ()=>{
-        togglePresenca(btn.dataset.presencaAula, datas[currentDay].iso, btn.dataset.naovai !== '1');
-      };
+    document.querySelectorAll('.presenca-switch').forEach(sw=>{
+      const aulaId = sw.dataset.presencaAula;
+      sw.querySelectorAll('button').forEach(btn=>{
+        btn.onclick = ()=>{
+          togglePresenca(aulaId, datas[currentDay].iso, btn.dataset.setVai === '0');
+        };
+      });
     });
   }
 
