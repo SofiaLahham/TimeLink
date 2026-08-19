@@ -97,6 +97,9 @@
   function minToHHMM(min){ const h=Math.floor(min/60), m=min%60; return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0'); }
   function fmtRange(a,b){ return `${a} – ${b}`; }
   function fmtDataCurta(d){ return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0'); }
+  function toISODate(dt){
+    return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');
+  }
   function datasSemanaAtual(){
     const hoje = new Date();
     const diaSemana = hoje.getDay();
@@ -107,9 +110,13 @@
     DIA_ORDEM.forEach((d,i)=>{
       const dt = new Date(segunda);
       dt.setDate(segunda.getDate()+i);
-      mapa[d] = dt.getDate();
+      mapa[d] = { numero: dt.getDate(), iso: toISODate(dt) };
     });
     return mapa;
+  }
+  function fmtDataLonga(iso){
+    const dt = new Date(iso+'T00:00:00');
+    return `${DIA_ABREV[dt.getDay()]}, ${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}`;
   }
   function tipoBadgeHtml(tipo){
     if(!tipo || tipo==='aula') return '';
@@ -345,7 +352,7 @@
   }
 
   // ---------- combinar grade do dia ----------
-  function combinarDia(dia){
+  function combinarDia(dia, dataISO){
     const pessoas = [{ id: session.user.id, nome: 'Eu', emoji: profile.emoji, cor: profile.cor, avatar_url: profile.avatar_url, aulas: myAulas }]
       .concat(friends.map(f=>{
         const p = perfilDe(f.otherId);
@@ -353,7 +360,7 @@
       }));
     let itens = [];
     pessoas.forEach(p=>{
-      p.aulas.filter(a=>a.dia===dia).forEach(a=>{
+      p.aulas.filter(a=> a.tipo==='aula' || !a.tipo ? a.dia===dia : a.data===dataISO).forEach(a=>{
         itens.push({
           pessoaId: p.id, nome: p.nome, cor: p.cor, emoji: p.emoji, avatar_url: p.avatar_url, tipo: a.tipo,
           inicio: a.inicio.slice(0,5), fim: a.fim.slice(0,5), sigla: a.sigla, predio: a.predio, sala: a.sala,
@@ -375,11 +382,31 @@
     return grupos;
   }
 
-  function todasPessoasComAula(dia){
+  function temNoDia(a, dia, dataISO){
+    return (a.tipo==='aula' || !a.tipo) ? a.dia===dia : a.data===dataISO;
+  }
+  function todasPessoasComAula(dia, dataISO){
     const nomes = new Set();
-    if(myAulas.some(a=>a.dia===dia)) nomes.add(profile.nome);
-    friends.forEach(f=>{ if((friendAulasMap[f.otherId]||[]).some(a=>a.dia===dia)) nomes.add(nomeExibido(f.otherId, perfilDe(f.otherId).nome || f.otherNome)); });
+    if(myAulas.some(a=>temNoDia(a,dia,dataISO))) nomes.add('Eu');
+    friends.forEach(f=>{ if((friendAulasMap[f.otherId]||[]).some(a=>temNoDia(a,dia,dataISO))) nomes.add(nomeExibido(f.otherId, perfilDe(f.otherId).nome || f.otherNome)); });
     return nomes;
+  }
+
+  function proximosEventos(){
+    const hojeISO = toISODate(new Date());
+    const pessoas = [{ id: session.user.id, nome:'Eu', aulas: myAulas }]
+      .concat(friends.map(f=>{
+        const p = perfilDe(f.otherId);
+        return { id: f.otherId, nome: nomeExibido(f.otherId, p.nome || f.otherNome), aulas: friendAulasMap[f.otherId] || [] };
+      }));
+    let eventos = [];
+    pessoas.forEach(p=>{
+      p.aulas.filter(a=> a.tipo && a.tipo!=='aula' && a.data && a.data>=hojeISO).forEach(a=>{
+        eventos.push({ nome:p.nome, tipo:a.tipo, data:a.data, sigla:a.sigla, predio:a.predio, sala:a.sala, inicio:a.inicio, fim:a.fim });
+      });
+    });
+    eventos.sort((a,b)=> a.data.localeCompare(b.data) || toMin(a.inicio)-toMin(b.inicio));
+    return eventos.slice(0,8);
   }
 
   function periodoDe(minInicio){
@@ -683,27 +710,41 @@
   // ---------- Grade (visão combinada) ----------
   function renderGradeGeral(){
     const hoje = new Date().getDay();
-    const grupos = combinarDia(currentDay);
+    const datas = datasSemanaAtual();
+    const grupos = combinarDia(currentDay, datas[currentDay].iso);
     const subtitulo = currentDay===hoje
       ? `${DIA_NOME[currentDay]}, ${fmtDataCurta(new Date())}`
       : DIA_NOME[currentDay];
     let html = headerHtml('Grade', subtitulo);
 
-    const datas = datasSemanaAtual();
     html += `<div class="days">`;
     DIA_ORDEM.forEach(d=>{
       const cls = ['day-pill'];
       if(d === currentDay) cls.push('active');
       if(d === hoje) cls.push('today');
-      const qtd = todasPessoasComAula(d).size;
+      const qtd = todasPessoasComAula(d, datas[d].iso).size;
       if(qtd>0) cls.push('has');
       html += `<div class="${cls.join(' ')}" data-day="${d}">
         <span class="d">${DIA_ABREV[d]}</span>
-        <span class="num">${datas[d]}</span>
+        <span class="num">${datas[d].numero}</span>
         <span class="dot"></span>
       </div>`;
     });
     html += `</div>`;
+
+    const eventos = proximosEventos();
+    if(eventos.length){
+      html += `<div class="section-title" style="margin-top:0">Próximas provas e trabalhos</div>`;
+      eventos.forEach(ev=>{
+        html += `<div class="list-item">
+          <div class="swatch" style="background:${TIPO_COR[ev.tipo]}">${ev.tipo==='prova'?'P':'T'}</div>
+          <div class="grow">
+            <div class="t1">${ev.nome}${ev.sigla?` · ${ev.sigla}`:''}${tipoBadgeHtml(ev.tipo)}</div>
+            <div class="t2">${fmtDataLonga(ev.data)} · ${fmtRange(ev.inicio.slice(0,5),ev.fim.slice(0,5))} · ${[ev.predio,ev.sala].filter(Boolean).join(' · ')||'sem local'}</div>
+          </div>
+        </div>`;
+      });
+    }
 
     const gruposPorPeriodo = { manha:[], tarde:[], noite:[] };
     grupos.forEach(g=> g.itens.forEach(it=> gruposPorPeriodo[periodoDe(it.inicioMin)].push(it.nome.split(' ')[0])));
@@ -760,18 +801,22 @@
       <button class="icon-btn" id="btn-copiar-mini" title="Copiar chave">${ICONS.copy}</button>
     </div>`;
 
+    const editandoEhAula = editando ? (editando.tipo==='aula' || !editando.tipo) : (tipoSelecionado==='aula');
+
     html += `<form class="card" id="form-aula">
-      ${editando? `<div class="section-title" style="margin-top:0">Editando aula</div>` : ''}
+      ${editando? `<div class="section-title" style="margin-top:0">Editando</div>` : ''}
+      <div class="field"><label>Tipo</label>${tipoChipsHtml('aula', editando?editando.tipo:tipoSelecionado)}</div>
       ${editando? `
-      <div class="field"><label>Dia</label><select id="aula-dia">
+      <div class="field" id="campo-dias" style="${editandoEhAula?'':'display:none'}"><label>Dia</label><select id="aula-dia">
         ${DIA_ORDEM.map(d=>`<option value="${d}" ${editando.dia===d?'selected':''}>${DIA_NOME[d]}</option>`).join('')}
       </select></div>
+      <div class="field" id="campo-data" style="${editandoEhAula?'display:none':''}"><label>Data</label><input type="date" id="aula-data" value="${editando.data||''}"></div>
       ` : `
-      <div class="field"><label>Dias</label><div class="days-multi" id="dias-multi">
+      <div class="field" id="campo-dias" style="${editandoEhAula?'':'display:none'}"><label>Dias</label><div class="days-multi" id="dias-multi">
         ${DIA_ORDEM.map(d=>`<button type="button" data-day="${d}" class="${diasSelecionados.includes(d)?'sel':''}">${DIA_ABREV[d]}</button>`).join('')}
       </div></div>
+      <div class="field" id="campo-data" style="${editandoEhAula?'display:none':''}"><label>Data</label><input type="date" id="aula-data"></div>
       `}
-      <div class="field"><label>Tipo</label>${tipoChipsHtml('aula', editando?editando.tipo:tipoSelecionado)}</div>
       <div class="field"><label>Sigla (opcional)</label><input type="text" id="aula-sigla" placeholder="Ex: AB" maxlength="10" value="${editando?editando.sigla||'':''}"></div>
       ${blocoChipsHtml('aula')}
       <div class="row2" style="margin-top:14px">
@@ -782,13 +827,16 @@
         <div class="field"><label>Prédio</label><input type="text" id="aula-predio" placeholder="Ex: Bloco B" value="${editando?editando.predio||'':''}"></div>
         <div class="field"><label>Sala</label><input type="text" id="aula-sala" placeholder="Ex: 204" value="${editando?editando.sala||'':''}"></div>
       </div>
-      <button class="primary" type="submit">${editando? 'Salvar alterações' : 'Adicionar aula'}</button>
+      <button class="primary" type="submit">${editando? 'Salvar alterações' : 'Adicionar'}</button>
       ${editando? `<button class="secondary" type="button" id="btn-cancel-edit">Cancelar edição</button>` : ''}
     </form>`;
 
-    html += `<div class="section-title">Suas aulas — toque pra editar</div>`;
-    if(myAulas.length===0) html += `<div class="empty">Nenhuma aula cadastrada ainda.</div>`;
-    const ordenadas = [...myAulas].sort((a,b)=>{
+    const minhasAulas = myAulas.filter(a=> a.tipo==='aula' || !a.tipo);
+    const meusEventos = myAulas.filter(a=> a.tipo && a.tipo!=='aula').sort((a,b)=> (a.data||'').localeCompare(b.data||''));
+
+    html += `<div class="section-title" style="margin-top:0">Suas aulas — toque pra editar</div>`;
+    if(minhasAulas.length===0) html += `<div class="empty">Nenhuma aula cadastrada ainda.</div>`;
+    const ordenadas = [...minhasAulas].sort((a,b)=>{
       const da = DIA_ORDEM.indexOf(a.dia), db = DIA_ORDEM.indexOf(b.dia);
       if(da!==db) return da-db;
       return toMin(a.inicio) - toMin(b.inicio);
@@ -797,7 +845,20 @@
       html += `<div class="list-item" data-edit="${a.id}" style="cursor:pointer">
         <div class="swatch" style="background:${profile.cor}">${avatarHtml(profile)}</div>
         <div class="grow">
-          <div class="t1">${DIA_ABREV[a.dia]} ${a.sigla?('· '+a.sigla):''} · ${a.inicio.slice(0,5)}–${a.fim.slice(0,5)}${tipoBadgeHtml(a.tipo)}</div>
+          <div class="t1">${DIA_ABREV[a.dia]} ${a.sigla?('· '+a.sigla):''} · ${a.inicio.slice(0,5)}–${a.fim.slice(0,5)}</div>
+          <div class="t2">${[a.predio,a.sala].filter(Boolean).join(' · ') || 'sem local'}</div>
+        </div>
+        <button class="del" data-del-aula="${a.id}">${ICONS.x}</button>
+      </div>`;
+    });
+
+    html += `<div class="section-title">Suas provas e trabalhos — toque pra editar</div>`;
+    if(meusEventos.length===0) html += `<div class="empty">Nenhuma prova ou trabalho agendado.</div>`;
+    meusEventos.forEach(a=>{
+      html += `<div class="list-item" data-edit="${a.id}" style="cursor:pointer">
+        <div class="swatch" style="background:${TIPO_COR[a.tipo]}">${a.tipo==='prova'?'P':'T'}</div>
+        <div class="grow">
+          <div class="t1">${a.data?fmtDataLonga(a.data):'sem data'} ${a.sigla?('· '+a.sigla):''} · ${a.inicio.slice(0,5)}–${a.fim.slice(0,5)}${tipoBadgeHtml(a.tipo)}</div>
           <div class="t2">${[a.predio,a.sala].filter(Boolean).join(' · ') || 'sem local'}</div>
         </div>
         <button class="del" data-del-aula="${a.id}">${ICONS.x}</button>
@@ -827,6 +888,11 @@
       btn.onclick = ()=>{
         tipoSelecionado = btn.dataset.tipo;
         document.querySelectorAll('#aula-tipo button').forEach(b=>b.classList.toggle('sel', b===btn));
+        const ehAula = tipoSelecionado === 'aula';
+        const diasEl = document.getElementById('campo-dias');
+        const dataEl = document.getElementById('campo-data');
+        if(diasEl) diasEl.style.display = ehAula ? '' : 'none';
+        if(dataEl) dataEl.style.display = ehAula ? 'none' : '';
       };
     });
 
@@ -839,13 +905,28 @@
       const predio = document.getElementById('aula-predio').value.trim();
       const sala = document.getElementById('aula-sala').value.trim();
       if(!inicio || !fim) return;
+      const ehAula = tipo === 'aula';
       if(editando){
-        const dia = Number(document.getElementById('aula-dia').value);
-        upsertAula({ dia, sigla, inicio, fim, predio, sala, tipo });
+        if(ehAula){
+          const dia = Number(document.getElementById('aula-dia').value);
+          upsertAula({ dia, sigla, inicio, fim, predio, sala, tipo, data: null });
+        } else {
+          const data = document.getElementById('aula-data').value;
+          if(!data){ showStatus('Escolha a data'); return; }
+          const dia = new Date(data+'T00:00:00').getDay();
+          upsertAula({ dia, sigla, inicio, fim, predio, sala, tipo, data });
+        }
       } else {
-        if(diasSelecionados.length===0){ showStatus('Escolha pelo menos um dia'); return; }
-        addAulaVariosDias({ sigla, inicio, fim, predio, sala, tipo }, diasSelecionados);
-        diasSelecionados = [];
+        if(ehAula){
+          if(diasSelecionados.length===0){ showStatus('Escolha pelo menos um dia'); return; }
+          addAulaVariosDias({ sigla, inicio, fim, predio, sala, tipo, data: null }, diasSelecionados);
+          diasSelecionados = [];
+        } else {
+          const data = document.getElementById('aula-data').value;
+          if(!data){ showStatus('Escolha a data'); return; }
+          const dia = new Date(data+'T00:00:00').getDay();
+          addAulaVariosDias({ sigla, inicio, fim, predio, sala, tipo, data }, [dia]);
+        }
         tipoSelecionado = 'aula';
       }
     };
