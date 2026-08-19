@@ -13,7 +13,7 @@
   const BLOCOS = [
     { label:'AB', inicio:'08:00', fim:'09:30' },
     { label:'CD', inicio:'09:45', fim:'11:15' },
-    { label:'EF', inicio:'11:30', fim:'13:00' },
+    { label:'EE1', inicio:'11:30', fim:'13:00' },
     { label:'GH', inicio:'14:00', fim:'15:30' },
     { label:'IJ', inicio:'15:45', fim:'17:15' },
     { label:'JK', inicio:'17:30', fim:'19:00' },
@@ -47,6 +47,7 @@
   const TB_AMIZADES = "amizades_turma";
   const TB_AULAS = "aulas_turma";
   const TB_APELIDOS = "apelidos_turma";
+  const TB_PRESENCAS = "presencas_turma";
   const BUCKET_AVATARS = "avatars_turma";
 
   let sb = null;
@@ -69,6 +70,7 @@
   let outgoing = [];          // pedidos enviados pendentes
   let myAulas = [];
   let friendAulasMap = {};    // otherId -> aulas[]
+  let presencaIndex = {};     // `${aula_id}|${data}` -> vai (bool)
   let apelidos = {};          // amigoId -> apelido definido por mim
 
   let authScreen = 'login';   // login | cadastro
@@ -90,7 +92,7 @@
     el.textContent = msg;
     el.classList.add('show');
     clearTimeout(showStatus._t);
-    showStatus._t = setTimeout(()=>el.classList.remove('show'), 2200);
+    showStatus._t = setTimeout(()=>el.classList.remove('show'), 2800);
   }
 
   function toMin(hhmm){ const [h,m] = hhmm.split(':').map(Number); return h*60+m; }
@@ -118,11 +120,23 @@
     const dt = new Date(iso+'T00:00:00');
     return `${DIA_ABREV[dt.getDay()]}, ${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}`;
   }
+  function semestreAtual(){
+    const hoje = new Date();
+    const sem = (hoje.getMonth()+1) <= 7 ? 1 : 2;
+    return `${hoje.getFullYear()}/${sem}`;
+  }
   function tipoBadgeHtml(tipo){
     if(!tipo || tipo==='aula') return '';
     const cor = TIPO_COR[tipo] || TIPO_COR.prova;
     const label = TIPOS.find(t=>t.v===tipo)?.label || tipo;
     return `<span class="tipo-badge" style="color:${cor};border-color:${cor}66;background:${cor}1f">${label}</span>`;
+  }
+  function presencaHtml(it, ehHoje){
+    if(it.pessoaId === session.user.id && ehHoje){
+      return `<button type="button" class="presenca-toggle ${it.naoVai?'off':''}" data-presenca-aula="${it.aulaId}" data-naovai="${it.naoVai?'1':'0'}">${it.naoVai?'Não vou hoje':'Vou hoje'}</button>`;
+    }
+    if(it.naoVai) return `<span class="naovai-tag">Não vai hoje</span>`;
+    return '';
   }
   function tipoChipsHtml(prefix, atual){
     return `<div class="days-multi" id="${prefix}-tipo">` + TIPOS.map(t=>
@@ -278,11 +292,28 @@
     friends.forEach(f=>{ friendAulasMap[f.otherId] = all.filter(a=>a.user_id===f.otherId); });
   }
 
+  async function fetchPresencas(){
+    const ids = [session.user.id, ...friends.map(f=>f.otherId)];
+    const { data, error } = await sb.from(TB_PRESENCAS).select('*').in('user_id', ids);
+    if(error){ console.error(error); return; }
+    presencaIndex = {};
+    (data || []).forEach(p=>{ presencaIndex[`${p.aula_id}|${p.data}`] = p.vai; });
+  }
+
+  async function togglePresenca(aulaId, dataISO, marcarNaoVai){
+    const { error } = await sb.from(TB_PRESENCAS)
+      .upsert({ aula_id: aulaId, data: dataISO, user_id: session.user.id, vai: !marcarNaoVai }, { onConflict: 'aula_id,data' });
+    if(error){ showStatus('Erro ao salvar presença'); console.error(error); return; }
+    await fetchPresencas();
+    render();
+  }
+
   async function refreshAll(){
     await fetchAmizades();
     await fetchPerfis();
     await fetchApelidos();
     await fetchAulas();
+    await fetchPresencas();
   }
 
   function perfilDe(id){
@@ -348,7 +379,7 @@
     const { error } = await sb.from(TB_AULAS).delete().eq('id', id);
     if(error){ showStatus('Erro ao remover'); console.error(error); return; }
     if(editingAulaId === id) editingAulaId = null;
-    await fetchAulas(); render();
+    await fetchAulas(); await fetchPresencas(); render();
   }
 
   // ---------- combinar grade do dia ----------
@@ -361,10 +392,12 @@
     let itens = [];
     pessoas.forEach(p=>{
       p.aulas.filter(a=> a.tipo==='aula' || !a.tipo ? a.dia===dia : a.data===dataISO).forEach(a=>{
+        const chavePresenca = `${a.id}|${dataISO}`;
         itens.push({
           pessoaId: p.id, nome: p.nome, cor: p.cor, emoji: p.emoji, avatar_url: p.avatar_url, tipo: a.tipo,
           inicio: a.inicio.slice(0,5), fim: a.fim.slice(0,5), sigla: a.sigla, predio: a.predio, sala: a.sala,
-          inicioMin: toMin(a.inicio), fimMin: toMin(a.fim)
+          inicioMin: toMin(a.inicio), fimMin: toMin(a.fim),
+          aulaId: a.id, naoVai: presencaIndex[chavePresenca] === false
         });
       });
     });
@@ -384,6 +417,17 @@
 
   function temNoDia(a, dia, dataISO){
     return (a.tipo==='aula' || !a.tipo) ? a.dia===dia : a.data===dataISO;
+  }
+
+  // Verifica se já existe, na própria grade, uma aula/prova/trabalho que
+  // sobrepõe o mesmo dia (ou data) e horário — evita cadastro duplicado.
+  function existeConflito(dia, dataISO, inicio, fim, ignorarId){
+    const iMin = toMin(inicio), fMin = toMin(fim);
+    return myAulas.some(a=>{
+      if(ignorarId && a.id===ignorarId) return false;
+      if(!temNoDia(a, dia, dataISO)) return false;
+      return iMin < toMin(a.fim) && fMin > toMin(a.inicio);
+    });
   }
   function todasPessoasComAula(dia, dataISO){
     const nomes = new Set();
@@ -676,6 +720,7 @@
         const predio = document.getElementById('ob-predio').value.trim();
         const sala = document.getElementById('ob-sala').value.trim();
         if(!inicio || !fim) return;
+        if(existeConflito(dia, null, inicio, fim, null)){ showStatus('Já existe uma atividade nesse horário nesse dia'); return; }
         const siglaFinal = sigla || detectarBloco(inicio, fim);
         addAulaOnboarding({ dia, sigla: siglaFinal, inicio, fim, predio, sala });
       };
@@ -715,7 +760,7 @@
     const subtitulo = currentDay===hoje
       ? `${DIA_NOME[currentDay]}, ${fmtDataCurta(new Date())}`
       : DIA_NOME[currentDay];
-    let html = headerHtml('Grade', subtitulo);
+    let html = headerHtml(`Grade ${semestreAtual()}`, subtitulo);
 
     html += `<div class="days">`;
     DIA_ORDEM.forEach(d=>{
@@ -763,18 +808,23 @@
       const agoraMin = nowMinutes();
       grupos.forEach(g=>{
         const ativo = currentDay===hoje && agoraMin >= g.inicioMin && agoraMin < g.fimMax;
+        const blocoLabel = g.itens.find(it=>it.sigla)?.sigla || '';
         html += `<div class="turno-card ${ativo?'now':''}">
           <div class="turno-head">
-            <span class="label">${minToHHMM(g.inicioMin)} – ${minToHHMM(g.fimMax)}</span>
+            <div class="turno-head-left">
+              <span class="label">${minToHHMM(g.inicioMin)} – ${minToHHMM(g.fimMax)}</span>
+              ${blocoLabel? `<span class="bloco-tag">${blocoLabel}</span>` : ''}
+            </div>
             ${ativo?`<span class="now-tag">Agora</span>`:''}
           </div>`;
         g.itens.forEach(it=>{
-          html += `<div class="aula-row">
+          html += `<div class="aula-row ${it.naoVai?'naovai':''}">
             <div class="avatar" style="background:${it.cor}">${avatarHtml(it)}</div>
             <div class="aula-info">
-              <div class="nome">${it.nome}${it.sigla?` · ${it.sigla}`:''}${tipoBadgeHtml(it.tipo)}</div>
+              <div class="nome">${it.nome}${tipoBadgeHtml(it.tipo)}</div>
               <div class="local">${fmtRange(it.inicio,it.fim)} · ${[it.predio, it.sala].filter(Boolean).join(' · ') || 'sem local'}</div>
             </div>
+            ${presencaHtml(it, currentDay===hoje)}
           </div>`;
         });
         html += `</div>`;
@@ -785,6 +835,11 @@
     bindCommon();
     document.querySelectorAll('.day-pill').forEach(el=>{
       el.onclick = ()=>{ currentDay = Number(el.dataset.day); render(); };
+    });
+    document.querySelectorAll('[data-presenca-aula]').forEach(btn=>{
+      btn.onclick = ()=>{
+        togglePresenca(btn.dataset.presencaAula, datas[currentDay].iso, btn.dataset.naovai !== '1');
+      };
     });
   }
 
@@ -909,22 +964,31 @@
       if(editando){
         if(ehAula){
           const dia = Number(document.getElementById('aula-dia').value);
+          if(existeConflito(dia, null, inicio, fim, editingAulaId)){ showStatus('Já existe uma atividade nesse horário nesse dia'); return; }
           upsertAula({ dia, sigla, inicio, fim, predio, sala, tipo, data: null });
         } else {
           const data = document.getElementById('aula-data').value;
           if(!data){ showStatus('Escolha a data'); return; }
           const dia = new Date(data+'T00:00:00').getDay();
+          if(existeConflito(dia, data, inicio, fim, editingAulaId)){ showStatus('Já existe uma atividade nesse horário nessa data'); return; }
           upsertAula({ dia, sigla, inicio, fim, predio, sala, tipo, data });
         }
       } else {
         if(ehAula){
           if(diasSelecionados.length===0){ showStatus('Escolha pelo menos um dia'); return; }
+          const diasConflito = diasSelecionados.filter(dia=> existeConflito(dia, null, inicio, fim, null));
+          if(diasConflito.length>0){
+            const nomes = diasConflito.map(d=>DIA_ABREV[d]).join(', ');
+            showStatus(`Já existe uma atividade nesse horário: ${nomes}`);
+            return;
+          }
           addAulaVariosDias({ sigla, inicio, fim, predio, sala, tipo, data: null }, diasSelecionados);
           diasSelecionados = [];
         } else {
           const data = document.getElementById('aula-data').value;
           if(!data){ showStatus('Escolha a data'); return; }
           const dia = new Date(data+'T00:00:00').getDay();
+          if(existeConflito(dia, data, inicio, fim, null)){ showStatus('Já existe uma atividade nesse horário nessa data'); return; }
           addAulaVariosDias({ sigla, inicio, fim, predio, sala, tipo, data }, [dia]);
         }
         tipoSelecionado = 'aula';
@@ -1131,7 +1195,7 @@
     });
     document.getElementById('btn-logout').onclick = async ()=>{
       await sb.auth.signOut();
-      session = null; profile = null; friends=[]; incoming=[]; outgoing=[]; myAulas=[]; friendAulasMap={}; perfilMap={}; apelidos={};
+      session = null; profile = null; friends=[]; incoming=[]; outgoing=[]; myAulas=[]; friendAulasMap={}; perfilMap={}; apelidos={}; presencaIndex={};
       authScreen = 'login'; tab = 'grade'; mostrarAjustes = false;
       render();
     };

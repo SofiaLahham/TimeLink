@@ -1,4 +1,4 @@
-const CACHE = 'timelink-v6';
+const CACHE = 'timelink-v9';
 const SHELL = ['./', './index.html', './app.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e)=>{
