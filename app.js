@@ -252,8 +252,15 @@
 
   // ---------- Supabase helpers ----------
   async function fetchProfile(){
-    const { data } = await sb.from(TB_PROFILES).select('id,nome,chave,emoji,cor,avatar_url,onboarding_feito').eq('id', session.user.id).maybeSingle();
-    profile = data;
+    let tentativa = 0;
+    while(tentativa < 3){
+      const { data, error } = await sb.from(TB_PROFILES).select('id,nome,chave,emoji,cor,avatar_url,onboarding_feito').eq('id', session.user.id).maybeSingle();
+      if(!error){ profile = data; return; }
+      console.error('fetchProfile falhou (tentativa '+(tentativa+1)+'):', error);
+      tentativa++;
+      if(tentativa < 3) await new Promise(r=>setTimeout(r, 600));
+    }
+    profile = undefined; // busca falhou de verdade (não é "perfil não existe") — não trata como conta nova
   }
 
   async function garantirProfile(nome){
@@ -656,6 +663,7 @@
     app.style.paddingBottom = '';
     if(emRecuperacaoSenha) return renderNovaSenha();
     if(!session) return renderAuth();
+    if(profile === undefined) return renderErroCarregarPerfil();
     if(!profile) return renderCompletarPerfil();
     if(!profile.onboarding_feito) return renderOnboarding();
     if(mostrarAjustes) return renderAjustes();
@@ -664,6 +672,24 @@
     if(tab === 'minhaarea') return renderMinhaArea();
     if(tab === 'perfil') return renderPerfil();
     renderGradeGeral();
+  }
+
+  function renderErroCarregarPerfil(){
+    app.innerHTML = `
+      <div class="brand-hero"><h1>Ops</h1><p>Não deu pra carregar sua conta agora. Isso costuma ser algo passageiro de conexão — não significa que sua conta ou seus dados sumiram.</p></div>
+      <button class="primary" type="button" id="btn-tentar-perfil">Tentar de novo</button>
+      <div class="auth-toggle"><button class="link-btn" type="button" id="btn-sair-erro-perfil">Sair e trocar de conta</button></div>
+    `;
+    document.getElementById('btn-tentar-perfil').onclick = async ()=>{
+      await fetchProfile();
+      if(profile) await refreshAll();
+      render();
+    };
+    document.getElementById('btn-sair-erro-perfil').onclick = async ()=>{
+      await sb.auth.signOut();
+      session = null; profile = null; authScreen = 'login';
+      render();
+    };
   }
 
   function renderCompletarPerfil(){
