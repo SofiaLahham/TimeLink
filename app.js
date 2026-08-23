@@ -674,7 +674,13 @@
         <div id="pf-err" class="err"></div>
         <button class="primary" type="submit">Salvar</button>
       </form>
+      <div class="auth-toggle">Entrou com a conta errada? <button class="link-btn" type="button" id="btn-sair-perfil">Sair e trocar de conta</button></div>
     `;
+    document.getElementById('btn-sair-perfil').onclick = async ()=>{
+      await sb.auth.signOut();
+      session = null; profile = null; authScreen = 'login';
+      render();
+    };
     document.getElementById('f-perfil').onsubmit = async (e)=>{
       e.preventDefault();
       const nome = document.getElementById('pf-nome').value.trim();
