@@ -897,7 +897,7 @@
             <div class="avatar" style="background:${esc(it.cor)}">${avatarHtml(it)}</div>
             <div class="aula-info">
               <div class="nome">${esc(it.nome)}${tipoBadgeHtml(it.tipo)}</div>
-              <div class="local">${fmtRange(it.inicio,it.fim)} · ${[it.predio, it.sala].filter(Boolean).map(esc).join(' · ') || 'sem local'}</div>
+              <div class="local">${[it.predio, it.sala].filter(Boolean).map(esc).join(' · ') || 'sem local'}</div>
             </div>
             ${presencaHtml(it, currentDay===hoje)}
           </div>`;
