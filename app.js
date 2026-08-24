@@ -39,10 +39,6 @@
     camera: `<svg class="icon" viewBox="0 0 24 24"><path d="M4 8a2 2 0 0 1 2-2h1.2l.8-1.5h8l.8 1.5H19a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8z"/><circle cx="12" cy="13" r="3.3"/></svg>`,
     copy: `<svg class="icon" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>`,
     logout: `<svg class="icon" viewBox="0 0 24 24"><path d="M15 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9"/><path d="M10 12h11m0 0l-3.5-3.5M21 12l-3.5 3.5"/></svg>`,
-    chat: `<svg class="icon" viewBox="0 0 24 24"><path d="M21 12a7 7 0 0 1-7 7H8l-5 3 1.3-4.8A7 7 0 1 1 21 12z"/></svg>`,
-    send: `<svg class="icon" viewBox="0 0 24 24"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>`,
-    poll: `<svg class="icon" viewBox="0 0 24 24"><path d="M6 20V10M12 20V4M18 20v-7"/></svg>`,
-    plus: `<svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>`,
   };
 
   const SUPABASE_URL = "https://nugflmccfcvsvbsihfql.supabase.co";
@@ -59,11 +55,6 @@
   const TB_AULAS = "aulas_turma";
   const TB_APELIDOS = "apelidos_turma";
   const TB_PRESENCAS = "presencas_turma";
-  const TB_CONVERSAS = "conversas_turma";
-  const TB_MEMBROS = "conversa_membros_turma";
-  const TB_MENSAGENS = "mensagens_turma";
-  const TB_ENQUETE_OPCOES = "enquete_opcoes_turma";
-  const TB_ENQUETE_VOTOS = "enquete_votos_turma";
   const BUCKET_AVATARS = "avatars_turma";
 
   let sb = null;
@@ -88,18 +79,9 @@
   let friendAulasMap = {};    // otherId -> aulas[]
   let presencaIndex = {};     // `${aula_id}|${data}` -> vai (bool)
   let apelidos = {};          // amigoId -> apelido definido por mim
-  let conversas = [];         // [{id, tipo, nome, criado_por, membros:[{user_id}], ultimaMsg}]
-  let conversaAbertaId = null;
-  let mensagens = [];         // mensagens da conversa aberta
-  let enquetes = {};          // mensagem_id -> { opcoes:[{id,texto,ordem}], votos:[{opcao_id,user_id}] }
-  let novaConversaTipo = null; // 'escolher' | 'grupo' | 'privado' | null (tela de criar)
-  let novaConversaSelecionados = []; // ids de amigas escolhidas
-  let realtimeChannel = null;
-  let criandoEnquete = false;
-  let enqueteOpcoesCount = 2;
 
   let authScreen = 'login';   // login | cadastro
-  let tab = 'grade';          // grade | conexoes | grupos | minhaarea | perfil
+  let tab = 'grade';          // grade | conexoes | minhaarea | perfil
   let mostrarAjustes = false;
   let currentDay = (function(){ const h = new Date().getDay(); return (h===0||h===6) ? 1 : h; })();
   let busy = false;
@@ -360,164 +342,12 @@
     render();
   }
 
-  async function fetchConversas(){
-    const { data: minhas, error: e1 } = await sb.from(TB_MEMBROS).select('conversa_id').eq('user_id', session.user.id);
-    if(e1){ console.error(e1); return; }
-    const ids = (minhas||[]).map(m=>m.conversa_id);
-    if(ids.length===0){ conversas = []; return; }
-    const [{ data: convs, error: e2 }, { data: todosMembros }, { data: ultimas }] = await Promise.all([
-      sb.from(TB_CONVERSAS).select('*').in('id', ids),
-      sb.from(TB_MEMBROS).select('conversa_id,user_id').in('conversa_id', ids),
-      sb.from(TB_MENSAGENS).select('conversa_id,texto,tipo,created_at').in('conversa_id', ids).order('created_at', { ascending:false }),
-    ]);
-    if(e2){ console.error(e2); return; }
-    conversas = (convs||[]).map(c=>{
-      const ultima = (ultimas||[]).find(m=>m.conversa_id===c.id);
-      return {
-        ...c,
-        membros: (todosMembros||[]).filter(m=>m.conversa_id===c.id).map(m=>m.user_id),
-        ultimaMsg: ultima ? (ultima.tipo==='enquete' ? `📊 ${ultima.texto}` : ultima.texto) : null,
-        ultimaData: ultima ? ultima.created_at : c.created_at,
-      };
-    }).sort((a,b)=> new Date(b.ultimaData) - new Date(a.ultimaData));
-
-    // busca perfil de quem estiver num grupo comigo mas ainda não conhecido
-    // (ex: colega adicionada por uma amiga em comum, sem ser minha conexão direta)
-    const idsDesconhecidos = [...new Set(conversas.flatMap(c=>c.membros))].filter(id=> id!==session.user.id && !perfilMap[id]);
-    if(idsDesconhecidos.length){
-      const { data: extras } = await sb.from(TB_PROFILES).select('id,nome,emoji,cor,avatar_url').in('id', idsDesconhecidos);
-      (extras||[]).forEach(p=> perfilMap[p.id] = p);
-    }
-  }
-
-  function nomeConversa(c){
-    if(c.tipo==='grupo') return c.nome || 'Grupo sem nome';
-    const outroId = c.membros.find(id=>id!==session.user.id);
-    const p = perfilDe(outroId);
-    return nomeExibido(outroId, p.nome || '?');
-  }
-
-  async function fetchMensagens(conversaId){
-    const { data, error } = await sb.from(TB_MENSAGENS).select('*').eq('conversa_id', conversaId).order('created_at', { ascending:true });
-    if(error){ console.error(error); return; }
-    mensagens = data || [];
-    const enqueteIds = mensagens.filter(m=>m.tipo==='enquete').map(m=>m.id);
-    enquetes = {};
-    if(enqueteIds.length){
-      const [{ data: opcoes }, { data: votos }] = await Promise.all([
-        sb.from(TB_ENQUETE_OPCOES).select('*').in('mensagem_id', enqueteIds).order('ordem', { ascending:true }),
-        sb.from(TB_ENQUETE_VOTOS).select('*').in('mensagem_id', enqueteIds),
-      ]);
-      enqueteIds.forEach(id=>{
-        enquetes[id] = {
-          opcoes: (opcoes||[]).filter(o=>o.mensagem_id===id),
-          votos: (votos||[]).filter(v=>v.mensagem_id===id),
-        };
-      });
-    }
-  }
-
-  async function fetchVotosDaMensagem(mensagemId){
-    const { data } = await sb.from(TB_ENQUETE_VOTOS).select('*').eq('mensagem_id', mensagemId);
-    if(!enquetes[mensagemId]) enquetes[mensagemId] = { opcoes:[], votos:[] };
-    enquetes[mensagemId].votos = data || [];
-  }
-
-  function assinarRealtime(conversaId){
-    if(realtimeChannel){ sb.removeChannel(realtimeChannel); realtimeChannel = null; }
-    realtimeChannel = sb.channel(`conversa-${conversaId}`)
-      .on('postgres_changes', { event:'INSERT', schema:'public', table:TB_MENSAGENS, filter:`conversa_id=eq.${conversaId}` }, async payload=>{
-        if(mensagens.some(m=>m.id===payload.new.id)) return;
-        mensagens = [...mensagens, payload.new];
-        if(payload.new.tipo==='enquete'){
-          const { data: opcoes } = await sb.from(TB_ENQUETE_OPCOES).select('*').eq('mensagem_id', payload.new.id).order('ordem', { ascending:true });
-          enquetes[payload.new.id] = { opcoes: opcoes||[], votos: [] };
-        }
-        render();
-      })
-      .on('postgres_changes', { event:'*', schema:'public', table:TB_ENQUETE_VOTOS }, async payload=>{
-        const msgId = (payload.new && payload.new.mensagem_id) || (payload.old && payload.old.mensagem_id);
-        if(!msgId || !enquetes[msgId]) return;
-        await fetchVotosDaMensagem(msgId);
-        render();
-      })
-      .subscribe();
-  }
-
-  async function abrirConversa(id){
-    conversaAbertaId = id;
-    await fetchMensagens(id);
-    assinarRealtime(id);
-    render();
-  }
-
-  function sairDaConversa(){
-    if(realtimeChannel){ sb.removeChannel(realtimeChannel); realtimeChannel = null; }
-    conversaAbertaId = null; mensagens = []; enquetes = {};
-  }
-
-  async function enviarMensagem(texto){
-    const t = texto.trim();
-    if(!t || !conversaAbertaId) return;
-    const conversaId = conversaAbertaId;
-    const { error } = await sb.from(TB_MENSAGENS).insert({ conversa_id: conversaId, user_id: session.user.id, tipo:'texto', texto: t });
-    if(error){ showStatus('Erro ao enviar mensagem'); console.error(error); return; }
-    // não depende só do tempo real pra atualizar a própria tela (rede lenta, etc.)
-    if(conversaAbertaId===conversaId){ await fetchMensagens(conversaId); render(); }
-  }
-
-  async function criarEnquete(pergunta, opcoesTexto){
-    if(!conversaAbertaId) return;
-    const conversaId = conversaAbertaId;
-    const { data: msg, error } = await sb.from(TB_MENSAGENS)
-      .insert({ conversa_id: conversaId, user_id: session.user.id, tipo:'enquete', texto: pergunta }).select().single();
-    if(error){ showStatus('Erro ao criar enquete'); console.error(error); return; }
-    const linhas = opcoesTexto.map((texto,i)=>({ mensagem_id: msg.id, texto, ordem:i }));
-    const { error: e2 } = await sb.from(TB_ENQUETE_OPCOES).insert(linhas);
-    if(e2){ showStatus('Erro ao salvar opções'); console.error(e2); return; }
-    if(conversaAbertaId===conversaId){ await fetchMensagens(conversaId); render(); }
-  }
-
-  async function votarEnquete(mensagemId, opcaoId){
-    const { error } = await sb.from(TB_ENQUETE_VOTOS)
-      .upsert({ mensagem_id: mensagemId, opcao_id: opcaoId, user_id: session.user.id }, { onConflict: 'mensagem_id,user_id' });
-    if(error){ showStatus('Erro ao votar'); console.error(error); return; }
-    await fetchVotosDaMensagem(mensagemId);
-    render();
-  }
-
-  async function criarConversa(tipo, membrosIds, nome){
-    if(tipo==='privado'){
-      const outroId = membrosIds[0];
-      const existente = conversas.find(c=> c.tipo==='privado' && c.membros.includes(outroId));
-      if(existente){ novaConversaTipo=null; novaConversaSelecionados=[]; return abrirConversa(existente.id); }
-    }
-    const { data, error } = await sb.from(TB_CONVERSAS)
-      .insert({ tipo, nome: tipo==='grupo' ? nome : null, criado_por: session.user.id }).select().single();
-    if(error){ showStatus('Erro ao criar conversa'); console.error(error); return; }
-    const membrosParaInserir = [session.user.id, ...membrosIds].map(uid=>({ conversa_id: data.id, user_id: uid }));
-    const { error: e2 } = await sb.from(TB_MEMBROS).insert(membrosParaInserir);
-    if(e2){ showStatus('Erro ao adicionar membros'); console.error(e2); return; }
-    novaConversaTipo = null; novaConversaSelecionados = [];
-    await fetchConversas();
-    abrirConversa(data.id);
-  }
-
-  async function sairDoGrupo(conversaId){
-    if(!confirm('Sair desse grupo? Você deixa de ver as mensagens.')) return;
-    await sb.from(TB_MEMBROS).delete().eq('conversa_id', conversaId).eq('user_id', session.user.id);
-    sairDaConversa();
-    await fetchConversas();
-    render();
-  }
-
   async function refreshAll(){
     await fetchAmizades();
     await fetchPerfis();
     await fetchApelidos();
     await fetchAulas();
     await fetchPresencas();
-    await fetchConversas();
   }
 
   function perfilDe(id){
@@ -675,7 +505,6 @@
     if(!profile.onboarding_feito) return renderOnboarding();
     if(mostrarAjustes) return renderAjustes();
     if(tab === 'conexoes') return renderConexoes();
-    if(tab === 'grupos') return renderGrupos();
     if(tab === 'minhaarea') return renderMinhaArea();
     if(tab === 'perfil') return renderPerfil();
     renderGradeGeral();
@@ -1333,213 +1162,6 @@
     document.querySelectorAll('[data-apelido]').forEach(b=> b.onclick = ()=>definirApelido(b.dataset.apelido, b.dataset.nome));
   }
 
-  // ---------- Grupos / chat ----------
-  function mensagemHtml(m){
-    const propria = m.user_id === session.user.id;
-    const autor = propria ? null : perfilDe(m.user_id);
-    return `<div class="msg-row ${propria?'own':''}">
-      ${!propria? `<div class="avatar" style="background:${esc(autor.cor)}">${avatarHtml(autor)}</div>` : ''}
-      <div class="msg-bubble">
-        ${!propria? `<div class="msg-autor">${esc(nomeExibido(m.user_id, autor.nome||'?'))}</div>` : ''}
-        <div class="msg-texto">${esc(m.texto)}</div>
-        <div class="msg-hora">${horaCurta(m.created_at)}</div>
-      </div>
-    </div>`;
-  }
-  function enqueteHtml(m){
-    const propria = m.user_id === session.user.id;
-    const autor = propria ? null : perfilDe(m.user_id);
-    const e = enquetes[m.id] || { opcoes:[], votos:[] };
-    const totalVotos = e.votos.length;
-    const meuVoto = e.votos.find(v=>v.user_id===session.user.id);
-    return `<div class="msg-row ${propria?'own':''}">
-      ${!propria? `<div class="avatar" style="background:${esc(autor.cor)}">${avatarHtml(autor)}</div>` : ''}
-      <div class="msg-bubble poll-card">
-        ${!propria? `<div class="msg-autor">${esc(nomeExibido(m.user_id, autor.nome||'?'))}</div>` : ''}
-        <div class="poll-pergunta">${ICONS.poll}<span>${esc(m.texto)}</span></div>
-        ${e.opcoes.map(o=>{
-          const votosOpcao = e.votos.filter(v=>v.opcao_id===o.id).length;
-          const pct = totalVotos? Math.round(votosOpcao/totalVotos*100) : 0;
-          const marcada = meuVoto && meuVoto.opcao_id===o.id;
-          return `<button type="button" class="poll-opcao ${marcada?'sel':''}" data-votar-msg="${m.id}" data-votar-opcao="${o.id}">
-            <span class="poll-opcao-barra" style="width:${pct}%"></span>
-            <span class="poll-opcao-texto">${esc(o.texto)}</span>
-            <span class="poll-opcao-pct">${pct}%</span>
-          </button>`;
-        }).join('')}
-        <div class="msg-hora">${totalVotos} voto${totalVotos!==1?'s':''} · ${horaCurta(m.created_at)}</div>
-      </div>
-    </div>`;
-  }
-
-  function renderGrupos(){
-    if(conversaAbertaId) return renderConversaAberta();
-    if(novaConversaTipo) return renderNovaConversa();
-
-    let html = headerHtml('Grupos', 'Converse com suas conexões');
-    html += `<button class="primary" id="btn-nova-conversa" style="margin-bottom:20px;display:flex;align-items:center;justify-content:center;gap:8px">${ICONS.plus}Nova conversa</button>`;
-
-    if(conversas.length===0){
-      html += friends.length===0
-        ? `<div class="empty">${ICONS.link.replace('class="icon"','class="icon" style="width:36px;height:36px"')}Você ainda não tem conexões.<br>Adicione alguém em <b>Conexões</b> pra poder conversar.</div>`
-        : `<div class="empty">${ICONS.chat.replace('class="icon"','class="icon" style="width:36px;height:36px"')}Nenhuma conversa ainda.<br>Toque em "Nova conversa" pra começar.</div>`;
-    } else {
-      conversas.forEach(c=>{
-        const outroId = c.tipo==='privado' ? c.membros.find(id=>id!==session.user.id) : null;
-        const p = outroId ? perfilDe(outroId) : null;
-        html += `<div class="list-item" style="cursor:pointer" data-abrir-conversa="${c.id}">
-          <div class="swatch" style="background:${c.tipo==='grupo'?'var(--accent)':esc(p.cor)}">${c.tipo==='grupo'?ICONS.chat:avatarHtml(p)}</div>
-          <div class="grow">
-            <div class="t1">${esc(nomeConversa(c))}</div>
-            <div class="t2">${c.ultimaMsg? esc(c.ultimaMsg.slice(0,44)) : 'Sem mensagens ainda'}</div>
-          </div>
-        </div>`;
-      });
-    }
-
-    app.innerHTML = html + bottomNavHtml();
-    bindCommon();
-    document.getElementById('btn-nova-conversa').onclick = ()=>{ novaConversaTipo='escolher'; render(); };
-    document.querySelectorAll('[data-abrir-conversa]').forEach(el=> el.onclick = ()=>abrirConversa(el.dataset.abrirConversa));
-  }
-
-  function renderNovaConversa(){
-    let html = `<div class="top-edit-bar">
-      <button class="icon-btn" id="btn-voltar-nova">${ICONS.chevronLeft}</button>
-      <div class="title">${novaConversaTipo==='grupo'?'Novo grupo':novaConversaTipo==='privado'?'Nova conversa':'Nova conversa'}</div>
-      <div style="width:38px"></div>
-    </div>`;
-
-    if(novaConversaTipo==='escolher'){
-      html += `<div class="yn-row">
-        <button data-tipo-conversa="grupo">Grupo</button>
-        <button data-tipo-conversa="privado">Conversa privada</button>
-      </div>`;
-      app.innerHTML = html;
-      document.getElementById('btn-voltar-nova').onclick = ()=>{ novaConversaTipo=null; render(); };
-      document.querySelectorAll('[data-tipo-conversa]').forEach(b=> b.onclick = ()=>{ novaConversaTipo = b.dataset.tipoConversa; novaConversaSelecionados=[]; render(); });
-      return;
-    }
-
-    if(novaConversaTipo==='grupo'){
-      html += `<div class="field"><label>Nome do grupo</label><input type="text" id="grupo-nome" placeholder="Ex: Turma de Cálculo"></div>`;
-    }
-    html += `<div class="section-title" style="margin-top:${novaConversaTipo==='grupo'?'20px':'0'}">Escolha ${novaConversaTipo==='grupo'?'quem participa':'quem você quer chamar'}</div>`;
-    if(friends.length===0){
-      html += `<div class="empty">Você ainda não tem conexões.</div>`;
-    } else {
-      friends.forEach(f=>{
-        const p = perfilDe(f.otherId);
-        const nome = nomeExibido(f.otherId, p.nome||f.otherNome);
-        const sel = novaConversaSelecionados.includes(f.otherId);
-        html += `<div class="list-item" style="cursor:pointer" data-toggle-membro="${f.otherId}">
-          <div class="swatch" style="background:${esc(p.cor)}">${avatarHtml(p)}</div>
-          <div class="grow"><div class="t1">${esc(nome)}</div></div>
-          <div class="check-circle ${sel?'sel':''}"></div>
-        </div>`;
-      });
-      if(novaConversaTipo==='grupo'){
-        html += `<button class="primary" id="btn-confirmar-nova" style="margin-top:16px" ${novaConversaSelecionados.length===0?'disabled':''}>Criar grupo</button>`;
-      }
-    }
-
-    app.innerHTML = html;
-    document.getElementById('btn-voltar-nova').onclick = ()=>{ novaConversaTipo='escolher'; novaConversaSelecionados=[]; render(); };
-    document.querySelectorAll('[data-toggle-membro]').forEach(el=>{
-      el.onclick = ()=>{
-        const id = el.dataset.toggleMembro;
-        if(novaConversaTipo==='privado'){
-          criarConversa('privado', [id], null);
-          return;
-        }
-        const i = novaConversaSelecionados.indexOf(id);
-        if(i>=0) novaConversaSelecionados.splice(i,1); else novaConversaSelecionados.push(id);
-        render();
-      };
-    });
-    const btnConfirmar = document.getElementById('btn-confirmar-nova');
-    if(btnConfirmar) btnConfirmar.onclick = ()=>{
-      const nome = document.getElementById('grupo-nome').value.trim() || 'Grupo sem nome';
-      criarConversa('grupo', novaConversaSelecionados, nome);
-    };
-  }
-
-  function renderConversaAberta(){
-    const c = conversas.find(x=>x.id===conversaAbertaId);
-    if(!c){ conversaAbertaId=null; return renderGrupos(); }
-
-    let html = `<div class="chat-header">
-      <button class="icon-btn" id="btn-fechar-conversa">${ICONS.chevronLeft}</button>
-      <div class="grow">
-        <div class="t1">${esc(nomeConversa(c))}</div>
-        ${c.tipo==='grupo'? `<div class="t2">${c.membros.length} participantes</div>` : ''}
-      </div>
-      ${c.tipo==='grupo'? `<button class="icon-btn" id="btn-sair-grupo" title="Sair do grupo">${ICONS.x}</button>` : ''}
-    </div>`;
-
-    html += `<div class="chat-messages" id="chat-messages">`;
-    if(mensagens.length===0){
-      html += `<div class="empty" style="padding-top:40px">Nenhuma mensagem ainda. Diga oi!</div>`;
-    } else {
-      mensagens.forEach(m=> html += m.tipo==='enquete' ? enqueteHtml(m) : mensagemHtml(m));
-    }
-    html += `</div>`;
-
-    if(criandoEnquete){
-      html += `<div class="poll-form">
-        <div class="field"><label>Pergunta</label><input type="text" id="enquete-pergunta" placeholder="Ex: Almoço às 11:30 ou 13:00?"></div>
-        ${Array.from({length:enqueteOpcoesCount}).map((_,i)=>`<div class="field"><label>Opção ${i+1}</label><input type="text" class="enquete-opcao-input" placeholder="Ex: 11:30"></div>`).join('')}
-        ${enqueteOpcoesCount<5? `<button type="button" class="secondary" id="btn-add-opcao" style="margin-top:0">+ Adicionar opção</button>` : ''}
-        <div class="row2" style="margin-top:14px">
-          <button type="button" class="secondary" style="margin-top:0" id="btn-cancelar-enquete">Cancelar</button>
-          <button type="button" class="primary" id="btn-criar-enquete">Criar enquete</button>
-        </div>
-      </div>`;
-    } else {
-      html += `<form class="chat-input-bar" id="f-mensagem">
-        <button type="button" class="icon-btn" id="btn-nova-enquete" title="Nova enquete">${ICONS.poll}</button>
-        <input type="text" id="msg-texto" placeholder="Escreva uma mensagem..." autocomplete="off">
-        <button type="submit" class="icon-btn send" title="Enviar">${ICONS.send}</button>
-      </form>`;
-    }
-
-    app.style.paddingBottom = criandoEnquete ? '20px' : '86px';
-    app.innerHTML = html;
-    window.scrollTo(0, document.body.scrollHeight);
-
-    document.getElementById('btn-fechar-conversa').onclick = async ()=>{ sairDaConversa(); await fetchConversas(); render(); };
-    const btnSair = document.getElementById('btn-sair-grupo');
-    if(btnSair) btnSair.onclick = ()=> sairDoGrupo(c.id);
-
-    document.querySelectorAll('[data-votar-msg]').forEach(b=>{
-      b.onclick = ()=> votarEnquete(b.dataset.votarMsg, b.dataset.votarOpcao);
-    });
-
-    const fMsg = document.getElementById('f-mensagem');
-    if(fMsg) fMsg.onsubmit = async (e)=>{
-      e.preventDefault();
-      const input = document.getElementById('msg-texto');
-      const texto = input.value;
-      if(!texto.trim()) return;
-      input.value = '';
-      await enviarMensagem(texto);
-    };
-    const btnNovaEnquete = document.getElementById('btn-nova-enquete');
-    if(btnNovaEnquete) btnNovaEnquete.onclick = ()=>{ criandoEnquete=true; enqueteOpcoesCount=2; render(); };
-    const btnAddOpcao = document.getElementById('btn-add-opcao');
-    if(btnAddOpcao) btnAddOpcao.onclick = ()=>{ enqueteOpcoesCount++; render(); };
-    const btnCancelarEnquete = document.getElementById('btn-cancelar-enquete');
-    if(btnCancelarEnquete) btnCancelarEnquete.onclick = ()=>{ criandoEnquete=false; render(); };
-    const btnCriarEnquete = document.getElementById('btn-criar-enquete');
-    if(btnCriarEnquete) btnCriarEnquete.onclick = async ()=>{
-      const pergunta = document.getElementById('enquete-pergunta').value.trim();
-      const opcoes = Array.from(document.querySelectorAll('.enquete-opcao-input')).map(i=>i.value.trim()).filter(Boolean);
-      if(!pergunta || opcoes.length<2){ showStatus('Preencha a pergunta e pelo menos 2 opções'); return; }
-      criandoEnquete = false;
-      await criarEnquete(pergunta, opcoes);
-    };
-  }
-
   // ---------- Perfil ----------
   function renderPerfil(){
     let html = headerHtml('Perfil', 'Como você aparece pras suas conexões');
@@ -1645,9 +1267,8 @@
       el.onclick = ()=> setTema(el.dataset.tema);
     });
     document.getElementById('btn-logout').onclick = async ()=>{
-      sairDaConversa();
       await sb.auth.signOut();
-      session = null; profile = null; friends=[]; incoming=[]; outgoing=[]; myAulas=[]; friendAulasMap={}; perfilMap={}; apelidos={}; presencaIndex={}; conversas=[]; novaConversaTipo=null; novaConversaSelecionados=[];
+      session = null; profile = null; friends=[]; incoming=[]; outgoing=[]; myAulas=[]; friendAulasMap={}; perfilMap={}; apelidos={}; presencaIndex={};
       authScreen = 'login'; tab = 'grade'; mostrarAjustes = false;
       render();
     };
@@ -1659,7 +1280,6 @@
     return `<div class="bottomnav"><div class="inner">
       ${item('grade','Grade',ICONS.calendar)}
       ${item('conexoes','Conexões',ICONS.link,badge)}
-      ${item('grupos','Grupos',ICONS.chat)}
       ${item('minhaarea','Minha área',ICONS.user)}
       ${item('perfil','Perfil',ICONS.userCircle)}
     </div></div>`;
@@ -1670,7 +1290,6 @@
     if(ajustesBtn) ajustesBtn.onclick = ()=>{ mostrarAjustes = true; render(); };
     document.querySelectorAll('.bottomnav [data-tab]').forEach(b=>{
       b.onclick = ()=>{
-        sairDaConversa(); novaConversaTipo = null; novaConversaSelecionados = [];
         tab = b.dataset.tab; editingAulaId = null; diasSelecionados = []; tipoSelecionado = 'aula'; render();
       };
     });
