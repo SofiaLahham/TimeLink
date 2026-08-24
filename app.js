@@ -270,7 +270,14 @@
       const cor = CORES[Math.floor(Math.random()*CORES.length)];
       const { error } = await sb.from(TB_PROFILES).insert({ id: session.user.id, nome, chave, cor });
       if(!error){ await fetchProfile(); return; }
+      console.error('garantirProfile: insert falhou (tentativa '+(tentativa+1)+'):', error);
       if(error.code !== '23505'){ throw error; }
+      // Colisão de valor único: pode ser a "chave" de convite (tenta de novo com
+      // outra) OU pode ser que o perfil já existisse (mesmo id) e a busca anterior
+      // só não tinha conseguido encontrá-lo — confere antes de continuar tentando,
+      // pra não ficar presa insistindo em criar um perfil que já existe.
+      await fetchProfile();
+      if(profile) return;
       tentativa++;
     }
     throw new Error('Não foi possível gerar uma chave única, tenta de novo.');
@@ -716,6 +723,7 @@
         await refreshAll();
         render();
       }catch(err){
+        console.error('Completar perfil falhou:', err);
         document.getElementById('pf-err').textContent = 'Não foi possível salvar, tenta de novo.';
       }
     };
@@ -880,6 +888,7 @@
         await refreshAll();
         render();
       }catch(err){
+        console.error('Cadastro falhou:', err);
         if(window.hcaptcha) window.hcaptcha.reset();
         errEl.textContent = err.message === 'User already registered' ? 'Esse e-mail já tem conta.' : 'Não foi possível criar a conta.';
       }
