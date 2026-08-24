@@ -112,7 +112,12 @@
   function datasSemanaAtual(){
     const hoje = new Date();
     const diaSemana = hoje.getDay();
-    const offsetSegunda = diaSemana===0 ? -6 : 1-diaSemana;
+    // Sábado e domingo não aparecem no app (só Seg-Sex), então nesses dois dias
+    // já mostra a segunda-feira que vem, e não a que acabou de passar.
+    let offsetSegunda;
+    if(diaSemana === 0) offsetSegunda = 1;
+    else if(diaSemana === 6) offsetSegunda = 2;
+    else offsetSegunda = 1 - diaSemana;
     const segunda = new Date(hoje);
     segunda.setDate(hoje.getDate()+offsetSegunda);
     const mapa = {};
