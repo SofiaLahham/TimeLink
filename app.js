@@ -26,6 +26,14 @@
     { v:'trabalho', label:'Trabalho' },
   ];
   const TIPO_COR = { prova:'#ef4444', trabalho:'#f59e0b' };
+  // Provas/trabalhos não têm horário fixo de aula — só um turno aproximado.
+  // inicio/fim aqui são usados por baixo dos panos (ordenar, detectar conflito),
+  // mas quem vê a tela só escolhe o turno, nunca um horário exato.
+  const TURNOS = [
+    { v:'manha', label:'Manhã', inicio:'08:00', fim:'12:00' },
+    { v:'tarde', label:'Tarde', inicio:'13:00', fim:'18:00' },
+    { v:'noite', label:'Noite', inicio:'19:00', fim:'23:00' },
+  ];
 
   const ICONS = {
     gear: `<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 13a7.6 7.6 0 0 0 .1-1 7.6 7.6 0 0 0-.1-1l2-1.5-2-3.4-2.4 1a7.7 7.7 0 0 0-1.7-1L14.8 3h-4l-.5 2.6a7.7 7.7 0 0 0-1.7 1l-2.4-1-2 3.4L6 11a7.6 7.6 0 0 0 0 2l-2 1.5 2 3.4 2.4-1a7.7 7.7 0 0 0 1.7 1l.5 2.6h4l.5-2.6a7.7 7.7 0 0 0 1.7-1l2.4 1 2-3.4-2-1.5z"/></svg>`,
@@ -90,6 +98,7 @@
   let obTemAula = {};
   let diasSelecionados = [];
   let tipoSelecionado = 'aula';
+  let turnoSelecionado = 'manha';
   let emRecuperacaoSenha = false;
 
   const app = document.getElementById('app');
@@ -141,20 +150,28 @@
     const sem = (hoje.getMonth()+1) <= 7 ? 1 : 2;
     return `${hoje.getFullYear()}/${sem}`;
   }
+  function turnoLabel(v){
+    return TURNOS.find(t=>t.v===v)?.label || '';
+  }
+  function turnoChipsHtml(prefix, atual){
+    return `<div class="days-multi" id="${prefix}-turno-chips">` + TURNOS.map(t=>
+      `<button type="button" data-turno="${t.v}" class="${(atual||'manha')===t.v?'sel':''}">${t.label}</button>`
+    ).join('') + `</div>`;
+  }
   function tipoBadgeHtml(tipo){
     if(!tipo || tipo==='aula') return '';
     const cor = TIPO_COR[tipo] || TIPO_COR.prova;
     const label = TIPOS.find(t=>t.v===tipo)?.label || tipo;
     return `<span class="tipo-badge" style="color:${cor};border-color:${cor}66;background:${cor}1f">${label}</span>`;
   }
-  function presencaHtml(it, ehHoje){
-    if(it.pessoaId === session.user.id && ehHoje){
+  function presencaHtml(it){
+    if(it.pessoaId === session.user.id){
       return `<div class="presenca-switch" data-presenca-aula="${it.aulaId}">
         <button type="button" class="${it.naoVai?'':'sel'}" data-set-vai="1">Vou</button>
         <button type="button" class="off ${it.naoVai?'sel':''}" data-set-vai="0">Não vou</button>
       </div>`;
     }
-    if(it.naoVai) return `<span class="naovai-tag">Não vai hoje</span>`;
+    if(it.naoVai) return `<span class="naovai-tag">Não vai</span>`;
     return '';
   }
   function tipoChipsHtml(prefix, atual){
@@ -485,7 +502,7 @@
     let eventos = [];
     pessoas.forEach(p=>{
       p.aulas.filter(a=> a.tipo && a.tipo!=='aula' && a.data && a.data>=hojeISO).forEach(a=>{
-        eventos.push({ nome:p.nome, tipo:a.tipo, data:a.data, sigla:a.sigla, predio:a.predio, sala:a.sala, inicio:a.inicio, fim:a.fim });
+        eventos.push({ nome:p.nome, tipo:a.tipo, data:a.data, sigla:a.sigla, predio:a.predio, sala:a.sala, inicio:a.inicio, fim:a.fim, turno:a.turno });
       });
     });
     eventos.sort((a,b)=> a.data.localeCompare(b.data) || toMin(a.inicio)-toMin(b.inicio));
@@ -860,7 +877,7 @@
           <div class="swatch" style="background:${TIPO_COR[ev.tipo]}">${ev.tipo==='prova'?'P':'T'}</div>
           <div class="grow">
             <div class="t1">${esc(ev.nome)}${ev.sigla?` · ${esc(ev.sigla)}`:''}${tipoBadgeHtml(ev.tipo)}</div>
-            <div class="t2">${fmtDataLonga(ev.data)} · ${fmtRange(ev.inicio.slice(0,5),ev.fim.slice(0,5))} · ${[ev.predio,ev.sala].filter(Boolean).map(esc).join(' · ')||'sem local'}</div>
+            <div class="t2">${fmtDataLonga(ev.data)} · ${esc(turnoLabel(ev.turno))} · ${[ev.predio,ev.sala].filter(Boolean).map(esc).join(' · ')||'sem local'}</div>
           </div>
         </div>`;
       });
@@ -899,7 +916,7 @@
               <div class="nome">${esc(it.nome)}${tipoBadgeHtml(it.tipo)}</div>
               <div class="local">${[it.predio, it.sala].filter(Boolean).map(esc).join(' · ') || 'sem local'}</div>
             </div>
-            ${presencaHtml(it, currentDay===hoje)}
+            ${presencaHtml(it)}
           </div>`;
         });
         html += `</div>`;
@@ -951,10 +968,16 @@
       <div class="field" id="campo-data" style="${editandoEhAula?'display:none':''}"><label>Data</label><input type="date" id="aula-data"></div>
       `}
       <div class="field"><label>Sigla (opcional)</label><input type="text" id="aula-sigla" placeholder="Ex: AB" maxlength="10" value="${editando?esc(editando.sigla||''):''}"></div>
-      ${blocoChipsHtml('aula')}
-      <div class="row2" style="margin-top:14px">
-        <div class="field"><label>Início</label><input type="time" id="aula-inicio" required value="${editando?editando.inicio.slice(0,5):''}"></div>
-        <div class="field"><label>Fim</label><input type="time" id="aula-fim" required value="${editando?editando.fim.slice(0,5):''}"></div>
+      <div id="campo-horario-aula" style="${editandoEhAula?'':'display:none'}">
+        ${blocoChipsHtml('aula')}
+        <div class="row2" style="margin-top:14px">
+          <div class="field"><label>Início</label><input type="time" id="aula-inicio" ${editandoEhAula?'required':''} value="${editando&&editandoEhAula?editando.inicio.slice(0,5):''}"></div>
+          <div class="field"><label>Fim</label><input type="time" id="aula-fim" ${editandoEhAula?'required':''} value="${editando&&editandoEhAula?editando.fim.slice(0,5):''}"></div>
+        </div>
+      </div>
+      <div class="field" id="campo-turno" style="${editandoEhAula?'display:none':''}">
+        <label>Turno</label>
+        ${turnoChipsHtml('aula', editando?editando.turno:turnoSelecionado)}
       </div>
       <div class="row2">
         <div class="field"><label>Prédio</label><input type="text" id="aula-predio" placeholder="Ex: Bloco B" value="${editando?esc(editando.predio||''):''}"></div>
@@ -991,7 +1014,7 @@
       html += `<div class="list-item" data-edit="${a.id}" style="cursor:pointer">
         <div class="swatch" style="background:${TIPO_COR[a.tipo]}">${a.tipo==='prova'?'P':'T'}</div>
         <div class="grow">
-          <div class="t1">${a.data?fmtDataLonga(a.data):'sem data'} ${a.sigla?('· '+esc(a.sigla)):''} · ${a.inicio.slice(0,5)}–${a.fim.slice(0,5)}${tipoBadgeHtml(a.tipo)}</div>
+          <div class="t1">${a.data?fmtDataLonga(a.data):'sem data'} ${a.sigla?('· '+esc(a.sigla)):''} · ${esc(turnoLabel(a.turno))}${tipoBadgeHtml(a.tipo)}</div>
           <div class="t2">${[a.predio,a.sala].filter(Boolean).map(esc).join(' · ') || 'sem local'}</div>
         </div>
         <button class="del" data-del-aula="${a.id}">${ICONS.x}</button>
@@ -1024,32 +1047,52 @@
         const ehAula = tipoSelecionado === 'aula';
         const diasEl = document.getElementById('campo-dias');
         const dataEl = document.getElementById('campo-data');
+        const horarioEl = document.getElementById('campo-horario-aula');
+        const turnoEl = document.getElementById('campo-turno');
         if(diasEl) diasEl.style.display = ehAula ? '' : 'none';
         if(dataEl) dataEl.style.display = ehAula ? 'none' : '';
+        if(horarioEl) horarioEl.style.display = ehAula ? '' : 'none';
+        if(turnoEl) turnoEl.style.display = ehAula ? 'none' : '';
+        const inicioInput = document.getElementById('aula-inicio');
+        const fimInput = document.getElementById('aula-fim');
+        if(inicioInput) inicioInput.required = ehAula;
+        if(fimInput) fimInput.required = ehAula;
+      };
+    });
+    document.querySelectorAll('#aula-turno-chips button').forEach(btn=>{
+      btn.onclick = ()=>{
+        turnoSelecionado = btn.dataset.turno;
+        document.querySelectorAll('#aula-turno-chips button').forEach(b=>b.classList.toggle('sel', b===btn));
       };
     });
 
     document.getElementById('form-aula').onsubmit = (e)=>{
       e.preventDefault();
       const tipo = document.querySelector('#aula-tipo button.sel')?.dataset.tipo || 'aula';
+      const ehAula = tipo === 'aula';
       const sigla = document.getElementById('aula-sigla').value.trim().toUpperCase();
-      const inicio = document.getElementById('aula-inicio').value;
-      const fim = document.getElementById('aula-fim').value;
       const predio = document.getElementById('aula-predio').value.trim();
       const sala = document.getElementById('aula-sala').value.trim();
-      if(!inicio || !fim) return;
-      const ehAula = tipo === 'aula';
+      let inicio, fim, turno = null;
+      if(ehAula){
+        inicio = document.getElementById('aula-inicio').value;
+        fim = document.getElementById('aula-fim').value;
+        if(!inicio || !fim) return;
+      } else {
+        const turnoBtn = document.querySelector('#aula-turno-chips button.sel');
+        const t = TURNOS.find(x=>x.v===(turnoBtn?turnoBtn.dataset.turno:turnoSelecionado)) || TURNOS[0];
+        turno = t.v; inicio = t.inicio; fim = t.fim;
+      }
       if(editando){
         if(ehAula){
           const dia = Number(document.getElementById('aula-dia').value);
           if(existeConflito(dia, null, inicio, fim, editingAulaId)){ showStatus('Já existe uma atividade nesse horário nesse dia'); return; }
-          upsertAula({ dia, sigla, inicio, fim, predio, sala, tipo, data: null });
+          upsertAula({ dia, sigla, inicio, fim, predio, sala, tipo, data: null, turno: null });
         } else {
           const data = document.getElementById('aula-data').value;
           if(!data){ showStatus('Escolha a data'); return; }
           const dia = new Date(data+'T00:00:00').getDay();
-          if(existeConflito(dia, data, inicio, fim, editingAulaId)){ showStatus('Já existe uma atividade nesse horário nessa data'); return; }
-          upsertAula({ dia, sigla, inicio, fim, predio, sala, tipo, data });
+          upsertAula({ dia, sigla, inicio, fim, predio, sala, tipo, data, turno });
         }
       } else {
         if(ehAula){
@@ -1060,16 +1103,16 @@
             showStatus(`Já existe uma atividade nesse horário: ${nomes}`);
             return;
           }
-          addAulaVariosDias({ sigla, inicio, fim, predio, sala, tipo, data: null }, diasSelecionados);
+          addAulaVariosDias({ sigla, inicio, fim, predio, sala, tipo, data: null, turno: null }, diasSelecionados);
           diasSelecionados = [];
         } else {
           const data = document.getElementById('aula-data').value;
           if(!data){ showStatus('Escolha a data'); return; }
           const dia = new Date(data+'T00:00:00').getDay();
-          if(existeConflito(dia, data, inicio, fim, null)){ showStatus('Já existe uma atividade nesse horário nessa data'); return; }
-          addAulaVariosDias({ sigla, inicio, fim, predio, sala, tipo, data }, [dia]);
+          addAulaVariosDias({ sigla, inicio, fim, predio, sala, tipo, data, turno }, [dia]);
         }
         tipoSelecionado = 'aula';
+        turnoSelecionado = 'manha';
       }
     };
     const cancelBtn = document.getElementById('btn-cancel-edit');
